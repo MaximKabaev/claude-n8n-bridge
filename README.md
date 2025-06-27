@@ -14,7 +14,9 @@ This middleware provides:
 ## Architecture
 
 ```
-Claude.ai → Apache Reverse Proxy → MCP Middleware → Keycloak (Auth) → MCP Middleware -> n8n MCP Server
+Claude.ai → Apache Reverse Proxy → MCP Middleware → n8n MCP Server
+                                         ↓
+                                    Keycloak (Auth)
 ```
 
 ## Prerequisites
