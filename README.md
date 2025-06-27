@@ -14,15 +14,14 @@ This middleware provides:
 ## Architecture
 
 ```
-Claude.ai → Apache Reverse Proxy → MCP Middleware → Keycloak (Auth)
-                                                  ↓
-                                            n8n MCP Server
+Claude.ai → Apache Reverse Proxy → MCP Middleware → Keycloak (Auth) -> n8n MCP Server
 ```
 
 ## Prerequisites
 
+- Any of the Claude Pro, Max, Team subscriptions
 - Ubuntu server (20.04 or later)
-- Domain name pointing to your server's IP address
+- Domain name
 - Docker and Docker Compose installed
 - Node.js 16+ and npm (for manual installation)
 - Apache web server for reverse proxy
@@ -136,8 +135,8 @@ sudo nano /etc/apache2/sites-available/mcp-services.conf
     CustomLog ${APACHE_LOG_DIR}/keycloak-access.log combined
 </VirtualHost>
 
-# n8n on port 5678
-<VirtualHost *:5678>
+# n8n on port 5679
+<VirtualHost *:5679>
     ServerName mcp.my-domain.com
     
     # SSL Configuration
@@ -149,12 +148,12 @@ sudo nano /etc/apache2/sites-available/mcp-services.conf
     RewriteEngine On
     RewriteCond %{HTTP:Upgrade} websocket [NC]
     RewriteCond %{HTTP:Connection} upgrade [NC]
-    RewriteRule ^/?(.*) "ws://localhost:5679/$1" [P,L]
+    RewriteRule ^/?(.*) "ws://localhost:5678/$1" [P,L]
     
     # Proxy to n8n
     ProxyPreserveHost On
-    ProxyPass / http://localhost:5679/
-    ProxyPassReverse / http://localhost:5679/
+    ProxyPass / http://localhost:5678/
+    ProxyPassReverse / http://localhost:5678/
     
     ErrorLog ${APACHE_LOG_DIR}/n8n-error.log
     CustomLog ${APACHE_LOG_DIR}/n8n-access.log combined
@@ -172,7 +171,7 @@ sudo a2enmod ssl
 
 # Add listen ports to Apache
 sudo bash -c 'echo "Listen 8080" >> /etc/apache2/ports.conf'
-sudo bash -c 'echo "Listen 5678" >> /etc/apache2/ports.conf'
+sudo bash -c 'echo "Listen 5679" >> /etc/apache2/ports.conf'
 
 # Test configuration
 sudo apache2ctl configtest
@@ -181,7 +180,7 @@ sudo apache2ctl configtest
 sudo systemctl restart apache2
 ```
 
-### 3. Quick Installation with Docker Compose
+### 3. Quick Installation with Docker Compose (Not tested)
 
 The fastest way to get everything running is using Docker Compose, which sets up all services at once:
 
@@ -199,7 +198,7 @@ cp .env.example .env
 Edit `.env` with your values:
 ```env
 # Server Configuration
-PORT=3000
+PORT=3000  # Change to 3001 or another port if 3000 is already in use
 PUBLIC_URL=https://mcp.my-domain.com
 
 # Keycloak Configuration
@@ -209,7 +208,10 @@ KEYCLOAK_CLIENT_ID=mcp-middleware
 KEYCLOAK_CLIENT_SECRET=  # Optional for public clients
 
 # n8n Configuration
-N8N_MCP_URL=https://mcp.my-domain.com:5678/webhook/mcp/YOUR_WEBHOOK_ID
+# For local n8n access only:
+N8N_MCP_URL=http://host.docker.internal:5678/mcp/YOUR_WEBHOOK_ID
+# For public n8n access:
+# N8N_MCP_URL=https://mcp.my-domain.com:5679/mcp/YOUR_WEBHOOK_ID
 N8N_BEARER_TOKEN=your-n8n-bearer-token  # Optional
 
 # Security
@@ -243,8 +245,14 @@ docker-compose logs -f
      - Create a workflow with "MCP Server Trigger" node
      - Configure Bearer token if needed
      - Activate the workflow and copy the webhook URL
-
-5. **Skip to section 6** to configure Claude integration.
+       
+5. **Update .env if needed** and restart services:
+   ```bash
+   docker-compose restart mcp-middleware
+   # Or restart all services
+   docker-compose down && docker-compose up -d
+   
+6. **Skip to section 6** to configure Claude integration.
 
 ---
 
@@ -254,7 +262,7 @@ If you prefer to install services individually instead of using Docker Compose:
 
 #### Keycloak Setup
 
-1. **Install Keycloak** (using Docker with different internal port):
+1. **Install Keycloak** (using Docker with different internal port. **Make sure to change the password**):
 ```bash
 docker run -d \
   --name keycloak \
@@ -272,11 +280,11 @@ docker run -d \
 
 #### n8n Setup
 
-1. **Install n8n** (using Docker with different internal port):
+1. **Install n8n**:
 ```bash
 docker run -d \
   --name n8n \
-  -p 5679:5678 \
+  -p 5678:5678 \
   -v ~/.n8n:/home/node/.n8n \
   -e N8N_PROTOCOL=https \
   -e N8N_HOST=mcp.my-domain.com \
@@ -295,9 +303,12 @@ docker run -d \
 docker build -t mcp-oauth-middleware .
 
 # Run the container
+# Note: If port 3000 is already in use, change both PORT in .env and the port mapping
+# Example: PORT=3001 in .env, then use -p 3001:3001
 docker run -d \
   --name mcp-middleware \
   -p 3000:3000 \
+  --add-host host.docker.internal:host-gateway \
   --env-file .env \
   --restart unless-stopped \
   mcp-oauth-middleware
@@ -305,6 +316,11 @@ docker run -d \
 # Check logs
 docker logs -f mcp-middleware
 ```
+
+**Important Notes:**
+- The `--add-host host.docker.internal:host-gateway` flag is required for the container to access local services like n8n
+- If port 3000 is taken, update PORT in `.env` (e.g., `PORT=3001`) and use matching port mapping (e.g., `-p 3001:3001`)
+- For debugging, remove `-d` to run in foreground and see logs immediately
 
 **Option B: Manual with PM2**
 ```bash
@@ -386,6 +402,7 @@ sudo ufw enable
 4. **API Key**: Use strong API keys as fallback authentication
 5. **CORS**: Configure CORS appropriately for your use case
 6. **Firewall**: Only expose necessary ports
+7. **Local n8n Access**: For better security, configure n8n to only be accessible locally (via `host.docker.internal`) rather than publicly
 
 ## Troubleshooting
 
@@ -407,8 +424,14 @@ sudo ufw enable
    - Verify n8n webhook URL is correct
    - Test SSE connection directly with curl
    - Check Apache proxy configuration for SSE support
+   - If using local n8n access, ensure `--add-host host.docker.internal:host-gateway` is included in docker run
 
-4. **Apache Configuration Issues**
+4. **Port Conflicts**
+   - If port 3000 is already in use, change PORT in `.env` to an available port (e.g., 3001)
+   - Update the docker run command to match: `-p 3001:3001`
+   - Update Apache ProxyPass directives to use the new port
+
+5. **Apache Configuration Issues**
    - Test config: `sudo apache2ctl configtest`
    - Check if all modules are enabled: `sudo a2enmod proxy proxy_http proxy_wstunnel ssl headers rewrite`
    - Verify SSL certificates are valid: `sudo certbot certificates`
