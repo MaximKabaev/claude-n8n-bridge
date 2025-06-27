@@ -2,6 +2,9 @@
 
 A Node.js middleware server that bridges Claude's OAuth requirements with n8n's MCP (Model Context Protocol) server, enabling secure integration between Claude.ai and your n8n workflows.
 
+## ⚠️ Important OAuth Limitation: 
+Due to a current bug in Claude's MCP implementation, OAuth tokens are not properly passed to the middleware after authentication. As a workaround, you MUST include your API key in the integration URL as shown below.
+
 ## Overview
 
 This middleware provides:
@@ -14,16 +17,15 @@ This middleware provides:
 ## Architecture
 
 ```
-Claude.ai → Apache Reverse Proxy → MCP Middleware → n8n MCP Server
-                                         ↓
-                                    Keycloak (Auth)
+Claude.ai → Apache Reverse Proxy → MCP Middleware → Keycloak (Auth)
+                                                  ↓
+                                            n8n MCP Server
 ```
 
 ## Prerequisites
 
-- Any of the Claude Pro, Max, Team subscriptions
 - Ubuntu server (20.04 or later)
-- Domain name
+- Domain name pointing to your server's IP address
 - Docker and Docker Compose installed
 - Node.js 16+ and npm (for manual installation)
 - Apache web server for reverse proxy
@@ -137,8 +139,8 @@ sudo nano /etc/apache2/sites-available/mcp-services.conf
     CustomLog ${APACHE_LOG_DIR}/keycloak-access.log combined
 </VirtualHost>
 
-# n8n on port 5679
-<VirtualHost *:5679>
+# n8n on port 5678
+<VirtualHost *:5678>
     ServerName mcp.my-domain.com
     
     # SSL Configuration
@@ -150,12 +152,12 @@ sudo nano /etc/apache2/sites-available/mcp-services.conf
     RewriteEngine On
     RewriteCond %{HTTP:Upgrade} websocket [NC]
     RewriteCond %{HTTP:Connection} upgrade [NC]
-    RewriteRule ^/?(.*) "ws://localhost:5678/$1" [P,L]
+    RewriteRule ^/?(.*) "ws://localhost:5679/$1" [P,L]
     
     # Proxy to n8n
     ProxyPreserveHost On
-    ProxyPass / http://localhost:5678/
-    ProxyPassReverse / http://localhost:5678/
+    ProxyPass / http://localhost:5679/
+    ProxyPassReverse / http://localhost:5679/
     
     ErrorLog ${APACHE_LOG_DIR}/n8n-error.log
     CustomLog ${APACHE_LOG_DIR}/n8n-access.log combined
@@ -173,7 +175,7 @@ sudo a2enmod ssl
 
 # Add listen ports to Apache
 sudo bash -c 'echo "Listen 8080" >> /etc/apache2/ports.conf'
-sudo bash -c 'echo "Listen 5679" >> /etc/apache2/ports.conf'
+sudo bash -c 'echo "Listen 5678" >> /etc/apache2/ports.conf'
 
 # Test configuration
 sudo apache2ctl configtest
@@ -196,8 +198,9 @@ cd mcp-oauth-middleware
 ```bash
 cp .env.example .env
 ```
-
 Edit `.env` with your values:
+
+> **Note:** Even though you authenticate via OAuth, the API key in the URL is currently required for the integration to work properly.
 ```env
 # Server Configuration
 PORT=3000  # Change to 3001 or another port if 3000 is already in use
@@ -210,10 +213,10 @@ KEYCLOAK_CLIENT_ID=mcp-middleware
 KEYCLOAK_CLIENT_SECRET=  # Optional for public clients
 
 # n8n Configuration
-# For local n8n access only (recommended):
-N8N_MCP_URL=http://host.docker.internal:5678/mcp/YOUR_WEBHOOK_ID
+# For local n8n access only (recommended for security):
+N8N_MCP_URL=http://host.docker.internal:5678/webhook/mcp/YOUR_WEBHOOK_ID
 # For public n8n access:
-# N8N_MCP_URL=https://mcp.my-domain.com:5679/mcp/YOUR_WEBHOOK_ID
+# N8N_MCP_URL=https://mcp.my-domain.com:5678/webhook/mcp/YOUR_WEBHOOK_ID
 N8N_BEARER_TOKEN=your-n8n-bearer-token  # Optional
 
 # Security
@@ -247,14 +250,8 @@ docker-compose logs -f
      - Create a workflow with "MCP Server Trigger" node
      - Configure Bearer token if needed
      - Activate the workflow and copy the webhook URL
-       
-5. **Update .env if needed** and restart services:
-   ```bash
-   docker-compose restart mcp-middleware
-   # Or restart all services
-   docker-compose down && docker-compose up -d
-   ```
-6. **Skip to section 6** to configure Claude integration.
+
+5. **Skip to section 6** to configure Claude integration.
 
 ---
 
@@ -264,7 +261,7 @@ If you prefer to install services individually instead of using Docker Compose:
 
 #### Keycloak Setup
 
-1. **Install Keycloak** (using Docker with different internal port. **Make sure to change the password**):
+1. **Install Keycloak** (using Docker with different internal port):
 ```bash
 docker run -d \
   --name keycloak \
@@ -282,11 +279,11 @@ docker run -d \
 
 #### n8n Setup
 
-1. **Install n8n**:
+1. **Install n8n** (using Docker with different internal port):
 ```bash
 docker run -d \
   --name n8n \
-  -p 5678:5678 \
+  -p 5679:5678 \
   -v ~/.n8n:/home/node/.n8n \
   -e N8N_PROTOCOL=https \
   -e N8N_HOST=mcp.my-domain.com \
@@ -342,7 +339,7 @@ pm2 startup
 2. Navigate to Settings → Integrations
 3. Add a new MCP integration:
    - Name: Your Integration Name
-   - URL: `https://mcp.my-domain.com`
+   - URL: `https://mcp.my-domain.com?api_key=your-secret-api-key`
 4. Click "Connect"
 5. You'll be redirected to Keycloak to authenticate
 6. After login, the integration will be active
@@ -352,7 +349,7 @@ pm2 startup
 ### Using MCP Inspector
 
 ```bash
-npx @modelcontextprotocol/inspector https://mcp.my-domain.com
+npx @modelcontextprotocol/inspector https://mcp.my-domain.com?api_key=your-secret-api-key
 ```
 
 ### Testing OAuth Flow
