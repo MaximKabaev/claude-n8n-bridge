@@ -5,6 +5,8 @@ services:
   mcp-middleware:
     build: .
     container_name: mcp-middleware
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "3000:3000"
     environment:
