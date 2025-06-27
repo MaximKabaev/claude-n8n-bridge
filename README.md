@@ -251,7 +251,14 @@ docker-compose logs -f
      - Configure Bearer token if needed
      - Activate the workflow and copy the webhook URL
 
-5. **Skip to section 6** to configure Claude integration.
+5. **Update .env if needed** and restart services:
+   ```bash
+   docker-compose restart mcp-middleware
+   # Or restart all services
+   docker-compose down && docker-compose up -d
+   ```
+   
+6. **Skip to section 6** to configure Claude integration.
 
 ---
 
