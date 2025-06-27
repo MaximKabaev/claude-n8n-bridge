@@ -21,10 +21,10 @@ Claude.ai → Apache Reverse Proxy → MCP Middleware → Keycloak (Auth)
 
 ## Prerequisites
 
-- Node.js 16+ and npm
-- Self-hosted n8n instance with MCP Server Trigger
-- Self-hosted Keycloak instance
-- Domain name with SSL certificates
+- Ubuntu server (20.04 or later)
+- Domain name pointing to your server's IP address
+- Docker and Docker Compose installed
+- Node.js 16+ and npm (for manual installation)
 - Apache web server for reverse proxy
 - Basic understanding of OAuth 2.0 and MCP
 
@@ -217,8 +217,11 @@ API_KEY=your-secret-api-key
 DISABLE_AUTH=false  # Set to true for testing only
 ```
 
-3. **Start all services**:
+3. **Build and start all services**:
 ```bash
+# Build the middleware image
+docker build -t mcp-oauth-middleware .
+
 # Start all services (Keycloak, n8n, and MCP middleware)
 docker-compose up -d
 
@@ -288,14 +291,19 @@ docker run -d \
 
 **Option A: Docker**
 ```bash
-# Build and run
+# Build the Docker image first
 docker build -t mcp-oauth-middleware .
+
+# Run the container
 docker run -d \
   --name mcp-middleware \
   -p 3000:3000 \
   --env-file .env \
   --restart unless-stopped \
   mcp-oauth-middleware
+
+# Check logs
+docker logs -f mcp-middleware
 ```
 
 **Option B: Manual with PM2**
