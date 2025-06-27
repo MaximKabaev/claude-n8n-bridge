@@ -14,7 +14,7 @@ This middleware provides:
 ## Architecture
 
 ```
-Claude.ai → Apache Reverse Proxy → MCP Middleware → Keycloak (Auth) -> n8n MCP Server
+Claude.ai → Apache Reverse Proxy → MCP Middleware → Keycloak (Auth) → MCP Middleware -> n8n MCP Server
 ```
 
 ## Prerequisites
@@ -180,7 +180,7 @@ sudo apache2ctl configtest
 sudo systemctl restart apache2
 ```
 
-### 3. Quick Installation with Docker Compose (Not tested)
+### 3. Quick Installation with Docker Compose
 
 The fastest way to get everything running is using Docker Compose, which sets up all services at once:
 
@@ -251,7 +251,7 @@ docker-compose logs -f
    docker-compose restart mcp-middleware
    # Or restart all services
    docker-compose down && docker-compose up -d
-   
+   ```
 6. **Skip to section 6** to configure Claude integration.
 
 ---
