@@ -14,9 +14,9 @@ This middleware provides:
 ## Architecture
 
 ```
-Claude.ai → MCP Middleware → Keycloak (Auth)
-                           ↓
-                         n8n MCP Server
+Claude.ai → Apache Reverse Proxy → MCP Middleware → Keycloak (Auth)
+                                                  ↓
+                                            n8n MCP Server
 ```
 
 ## Prerequisites
@@ -25,23 +25,29 @@ Claude.ai → MCP Middleware → Keycloak (Auth)
 - Self-hosted n8n instance with MCP Server Trigger
 - Self-hosted Keycloak instance
 - Domain name with SSL certificates
+- Apache web server for reverse proxy
 - Basic understanding of OAuth 2.0 and MCP
 
 ## Quick Start
 
 ### 1. Domain Setup
 
-You'll need a domain with SSL certificates. Example structure:
-- `mcp.my-domain.com` - MCP middleware
-- `auth.my-domain.com` - Keycloak
-- `n8n.my-domain.com` - n8n instance
+You'll need a domain with SSL certificates. All services will run on the same server with different ports:
+- `mcp.my-domain.com` → localhost:3000 (MCP middleware)
+- `mcp.my-domain.com:8080` → localhost:8080 (Keycloak)
+- `mcp.my-domain.com:5678` → localhost:5678 (n8n)
 
 #### Getting SSL Certificates with Let's Encrypt
 
+Make sure your domain DNS A record points to your server IP.
+
 ```bash
-# Install certbot
+# Install certbot and Apache
 sudo apt update
-sudo apt install certbot
+sudo apt install certbot python3-certbot-apache apache2
+
+# Enable required Apache modules
+sudo a2enmod proxy proxy_http proxy_wstunnel ssl headers rewrite
 
 # Get certificate for your domain
 sudo certbot certonly --standalone -d mcp.my-domain.com
@@ -51,62 +57,138 @@ sudo certbot certonly --standalone -d mcp.my-domain.com
 # /etc/letsencrypt/live/mcp.my-domain.com/privkey.pem
 ```
 
-### 2. Keycloak Setup
+### 2. Apache Reverse Proxy Setup
 
-1. **Install Keycloak** (using Docker):
+1. **Create Apache configuration**:
+
 ```bash
-docker run -d \
-  --name keycloak \
-  -p 8080:8080 \
-  -e KEYCLOAK_ADMIN=admin \
-  -e KEYCLOAK_ADMIN_PASSWORD=admin \
-  quay.io/keycloak/keycloak:latest \
-  start-dev
+sudo nano /etc/apache2/sites-available/mcp-services.conf
 ```
 
-2. **Configure Keycloak**:
-   - Access Keycloak at `https://auth.my-domain.com:8080`
-   - Create a new realm called `mcp`
-   - Create a client:
-     - Client ID: `mcp-claude`
-     - Client Protocol: `openid-connect`
-     - Access Type: `public`
-     - Valid Redirect URIs: `https://claude.ai/api/mcp/auth_callback`
-     - Web Origins: `*`
+2. **Add the following configuration**:
 
-3. **Enable Dynamic Client Registration**:
-   - Go to Realm Settings → Client Registration
-   - Enable "Anonymous access"
-   - Or create an Initial Access Token for controlled registration
+```apache
+<VirtualHost *:80>
+    ServerName mcp.my-domain.com
+    
+    # Redirect HTTP to HTTPS
+    RewriteEngine On
+    RewriteCond %{HTTPS} off
+    RewriteRule ^(.*)$ https://%{HTTP_HOST}$1 [R=301,L]
+</VirtualHost>
 
-### 3. n8n Setup
+<VirtualHost *:443>
+    ServerName mcp.my-domain.com
+    
+    # SSL Configuration
+    SSLEngine on
+    SSLCertificateFile /etc/letsencrypt/live/mcp.my-domain.com/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/mcp.my-domain.com/privkey.pem
+    
+    # Security Headers
+    Header always set X-Content-Type-Options "nosniff"
+    Header always set X-Frame-Options "DENY"
+    Header always set X-XSS-Protection "1; mode=block"
+    
+    # Enable WebSocket support
+    RewriteEngine On
+    RewriteCond %{HTTP:Upgrade} websocket [NC]
+    RewriteCond %{HTTP:Connection} upgrade [NC]
+    RewriteRule ^/?(.*) "ws://localhost:3000/$1" [P,L]
+    
+    # Proxy to MCP Middleware (default)
+    ProxyPreserveHost On
+    ProxyPass / http://localhost:3000/
+    ProxyPassReverse / http://localhost:3000/
+    
+    # SSE Support
+    ProxyPass /mcp http://localhost:3000/mcp
+    ProxyPassReverse /mcp http://localhost:3000/mcp
+    ProxyPass /sse http://localhost:3000/sse
+    ProxyPassReverse /sse http://localhost:3000/sse
+    
+    # Disable buffering for SSE
+    ProxyPass /mcp http://localhost:3000/mcp flushpackets=on
+    
+    ErrorLog ${APACHE_LOG_DIR}/mcp-error.log
+    CustomLog ${APACHE_LOG_DIR}/mcp-access.log combined
+</VirtualHost>
 
-1. **Install n8n** (using Docker):
-```bash
-docker run -d \
-  --name n8n \
-  -p 5678:5678 \
-  -v ~/.n8n:/home/node/.n8n \
-  n8nio/n8n
+# Keycloak on port 8080
+<VirtualHost *:8080>
+    ServerName mcp.my-domain.com
+    
+    # SSL Configuration
+    SSLEngine on
+    SSLCertificateFile /etc/letsencrypt/live/mcp.my-domain.com/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/mcp.my-domain.com/privkey.pem
+    
+    # Proxy to Keycloak
+    ProxyPreserveHost On
+    ProxyPass / http://localhost:8081/
+    ProxyPassReverse / http://localhost:8081/
+    
+    # Keycloak specific headers
+    RequestHeader set X-Forwarded-Proto "https"
+    RequestHeader set X-Forwarded-Port "8080"
+    
+    ErrorLog ${APACHE_LOG_DIR}/keycloak-error.log
+    CustomLog ${APACHE_LOG_DIR}/keycloak-access.log combined
+</VirtualHost>
+
+# n8n on port 5678
+<VirtualHost *:5678>
+    ServerName mcp.my-domain.com
+    
+    # SSL Configuration
+    SSLEngine on
+    SSLCertificateFile /etc/letsencrypt/live/mcp.my-domain.com/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/mcp.my-domain.com/privkey.pem
+    
+    # Enable WebSocket support for n8n
+    RewriteEngine On
+    RewriteCond %{HTTP:Upgrade} websocket [NC]
+    RewriteCond %{HTTP:Connection} upgrade [NC]
+    RewriteRule ^/?(.*) "ws://localhost:5679/$1" [P,L]
+    
+    # Proxy to n8n
+    ProxyPreserveHost On
+    ProxyPass / http://localhost:5679/
+    ProxyPassReverse / http://localhost:5679/
+    
+    ErrorLog ${APACHE_LOG_DIR}/n8n-error.log
+    CustomLog ${APACHE_LOG_DIR}/n8n-access.log combined
+</VirtualHost>
 ```
 
-2. **Create MCP Workflow**:
-   - Create a new workflow in n8n
-   - Add "MCP Server Trigger" node
-   - Configure authentication (optional):
-     - Type: Bearer Token
-     - Token: `your-n8n-bearer-token`
-   - Add your tools/workflows
-   - Activate the workflow
-   - Copy the webhook URL (e.g., `https://n8n.my-domain.com/webhook/mcp/YOUR_ID`)
+3. **Enable the site and required ports**:
 
-### 4. Middleware Installation
+```bash
+# Enable the site
+sudo a2ensite mcp-services.conf
 
-1. **Clone and install**:
+# Enable SSL module
+sudo a2enmod ssl
+
+# Add listen ports to Apache
+sudo bash -c 'echo "Listen 8080" >> /etc/apache2/ports.conf'
+sudo bash -c 'echo "Listen 5678" >> /etc/apache2/ports.conf'
+
+# Test configuration
+sudo apache2ctl configtest
+
+# Restart Apache
+sudo systemctl restart apache2
+```
+
+### 3. Quick Installation with Docker Compose
+
+The fastest way to get everything running is using Docker Compose, which sets up all services at once:
+
+1. **Clone the repository**:
 ```bash
 git clone https://github.com/yourusername/mcp-oauth-middleware.git
 cd mcp-oauth-middleware
-npm install
 ```
 
 2. **Configure environment**:
@@ -122,12 +204,12 @@ PUBLIC_URL=https://mcp.my-domain.com
 
 # Keycloak Configuration
 KEYCLOAK_REALM=mcp
-KEYCLOAK_SERVER_URL=https://auth.my-domain.com:8080
+KEYCLOAK_SERVER_URL=https://mcp.my-domain.com:8080
 KEYCLOAK_CLIENT_ID=mcp-middleware
 KEYCLOAK_CLIENT_SECRET=  # Optional for public clients
 
 # n8n Configuration
-N8N_MCP_URL=https://n8n.my-domain.com/webhook/mcp/YOUR_WEBHOOK_ID
+N8N_MCP_URL=https://mcp.my-domain.com:5678/webhook/mcp/YOUR_WEBHOOK_ID
 N8N_BEARER_TOKEN=your-n8n-bearer-token  # Optional
 
 # Security
@@ -135,10 +217,91 @@ API_KEY=your-secret-api-key
 DISABLE_AUTH=false  # Set to true for testing only
 ```
 
-3. **Run the middleware**:
+3. **Start all services**:
 ```bash
-# Development
-npm run dev
+# Start all services (Keycloak, n8n, and MCP middleware)
+docker-compose up -d
+
+# Check status
+docker-compose ps
+
+# View logs
+docker-compose logs -f
+```
+
+4. **Configure services**:
+   - **Keycloak**: Access at `https://mcp.my-domain.com:8080`
+     - Create a new realm called `mcp`
+     - Create a client with ID `mcp-claude` (public client)
+     - Set Valid Redirect URIs: `https://claude.ai/api/mcp/auth_callback`
+     - Enable "Anonymous access" in Realm Settings → Client Registration
+   
+   - **n8n**: Access at `https://mcp.my-domain.com:5678`
+     - Create a workflow with "MCP Server Trigger" node
+     - Configure Bearer token if needed
+     - Activate the workflow and copy the webhook URL
+
+5. **Skip to section 6** to configure Claude integration.
+
+---
+
+### Alternative: Manual Installation of Individual Services
+
+If you prefer to install services individually instead of using Docker Compose:
+
+#### Keycloak Setup
+
+1. **Install Keycloak** (using Docker with different internal port):
+```bash
+docker run -d \
+  --name keycloak \
+  -p 8081:8080 \
+  -e KEYCLOAK_ADMIN=admin \
+  -e KEYCLOAK_ADMIN_PASSWORD=admin \
+  -e KC_PROXY=edge \
+  -e KC_HOSTNAME_STRICT=false \
+  -e KC_HOSTNAME_URL=https://mcp.my-domain.com:8080 \
+  quay.io/keycloak/keycloak:latest \
+  start-dev
+```
+
+2. **Configure Keycloak** (same as step 4 above)
+
+#### n8n Setup
+
+1. **Install n8n** (using Docker with different internal port):
+```bash
+docker run -d \
+  --name n8n \
+  -p 5679:5678 \
+  -v ~/.n8n:/home/node/.n8n \
+  -e N8N_PROTOCOL=https \
+  -e N8N_HOST=mcp.my-domain.com \
+  -e N8N_PORT=5678 \
+  -e WEBHOOK_URL=https://mcp.my-domain.com:5678 \
+  n8nio/n8n
+```
+
+2. **Create MCP Workflow** (same as step 4 above)
+
+#### Middleware Installation
+
+**Option A: Docker**
+```bash
+# Build and run
+docker build -t mcp-oauth-middleware .
+docker run -d \
+  --name mcp-middleware \
+  -p 3000:3000 \
+  --env-file .env \
+  --restart unless-stopped \
+  mcp-oauth-middleware
+```
+
+**Option B: Manual with PM2**
+```bash
+# Install dependencies
+npm install
 
 # Production with PM2
 npm install -g pm2
@@ -147,7 +310,7 @@ pm2 save
 pm2 startup
 ```
 
-### 5. Configure Claude Integration
+### 6. Configure Claude Integration
 
 1. Go to [Claude.ai](https://claude.ai)
 2. Navigate to Settings → Integrations
@@ -185,38 +348,81 @@ curl -H "X-API-Key: your-secret-api-key" \
      https://mcp.my-domain.com/mcp
 ```
 
+## Firewall Configuration
+
+If using UFW (Ubuntu Firewall):
+
+```bash
+# Allow SSH (if not already allowed)
+sudo ufw allow 22/tcp
+
+# Allow HTTP and HTTPS
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+
+# Allow Keycloak
+sudo ufw allow 8080/tcp
+
+# Allow n8n
+sudo ufw allow 5678/tcp
+
+# Enable firewall
+sudo ufw enable
+```
+
 ## Security Considerations
 
-1. **SSL/TLS**: Always use HTTPS in production
-2. **Firewall**: Restrict n8n access to only the middleware server
+1. **SSL/TLS**: Always use HTTPS in production (handled by Apache)
+2. **Internal Ports**: Services run on different internal ports than external
 3. **Token Validation**: The middleware validates all Keycloak tokens
 4. **API Key**: Use strong API keys as fallback authentication
 5. **CORS**: Configure CORS appropriately for your use case
+6. **Firewall**: Only expose necessary ports
 
 ## Troubleshooting
 
 ### Common Issues
 
 1. **"Failed to connect" in Claude**
-   - Check OAuth discovery endpoint is accessible
-   - Verify Keycloak is running and configured correctly
-   - Check middleware logs for errors
+   - Check OAuth discovery endpoint is accessible: `curl https://mcp.my-domain.com/.well-known/oauth-authorization-server`
+   - Verify Keycloak is running and accessible at `https://mcp.my-domain.com:8080`
+   - Check middleware logs: `pm2 logs mcp-middleware`
+   - Check Apache logs: `sudo tail -f /var/log/apache2/mcp-error.log`
 
 2. **401 Unauthorized**
    - Verify Bearer token or API key is correct
    - Check Keycloak token validation
-   - Ensure client registration is enabled
+   - Ensure client registration is enabled in Keycloak
 
 3. **SSE Connection Fails**
    - Check n8n MCP trigger is active
    - Verify n8n webhook URL is correct
    - Test SSE connection directly with curl
+   - Check Apache proxy configuration for SSE support
+
+4. **Apache Configuration Issues**
+   - Test config: `sudo apache2ctl configtest`
+   - Check if all modules are enabled: `sudo a2enmod proxy proxy_http proxy_wstunnel ssl headers rewrite`
+   - Verify SSL certificates are valid: `sudo certbot certificates`
 
 ### Debug Mode
 
 Enable detailed logging:
 ```bash
 DEBUG=* node mcp-oauth-middleware.js
+```
+
+Monitor all logs:
+```bash
+# Apache logs
+sudo tail -f /var/log/apache2/*.log
+
+# PM2 logs
+pm2 logs mcp-middleware
+
+# Docker logs
+docker logs -f keycloak
+docker logs -f n8n
 ```
 
 ## API Endpoints
