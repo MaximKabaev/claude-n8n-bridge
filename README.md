@@ -210,7 +210,7 @@ KEYCLOAK_CLIENT_ID=mcp-middleware
 KEYCLOAK_CLIENT_SECRET=  # Optional for public clients
 
 # n8n Configuration
-# For local n8n access only:
+# For local n8n access only (recommended):
 N8N_MCP_URL=http://host.docker.internal:5678/mcp/YOUR_WEBHOOK_ID
 # For public n8n access:
 # N8N_MCP_URL=https://mcp.my-domain.com:5679/mcp/YOUR_WEBHOOK_ID
