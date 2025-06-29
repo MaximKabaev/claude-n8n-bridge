@@ -14,14 +14,6 @@ This middleware provides:
 - Secure proxying of MCP requests to n8n
 - API key authentication fallback
 
-## Architecture
-
-```
-Claude.ai → Apache Reverse Proxy → MCP Middleware → Keycloak (Auth)
-                                                  ↓
-                                            n8n MCP Server
-```
-
 ## Prerequisites
 
 - Ubuntu server (20.04 or later)
@@ -38,7 +30,7 @@ Claude.ai → Apache Reverse Proxy → MCP Middleware → Keycloak (Auth)
 You'll need a domain with SSL certificates. All services will run on the same server with different ports:
 - `mcp.my-domain.com` → localhost:3000 (MCP middleware)
 - `mcp.my-domain.com:8080` → localhost:8080 (Keycloak)
-- `mcp.my-domain.com:5678` → localhost:5678 (n8n)
+- `mcp.my-domain.com:5678` → localhost:5678 (n8n) (optional if you are not self-hosting n8n)
 
 #### Getting SSL Certificates with Let's Encrypt
 
