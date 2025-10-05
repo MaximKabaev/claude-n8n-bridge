@@ -182,7 +182,7 @@ The fastest way to get everything running is using Docker Compose, which sets up
 
 1. **Clone the repository**:
 ```bash
-git clone https://github.com/yourusername/mcp-oauth-middleware.git
+git clone https://github.com/MaximKabaev/mcp-oauth-middleware.git
 cd mcp-oauth-middleware
 ```
 
