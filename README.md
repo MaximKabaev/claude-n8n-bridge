@@ -188,7 +188,7 @@ cd claude-n8n-bridge
 
 2. **Configure environment**:
 ```bash
-cp .env.example .env
+cp .env-example .env
 ```
 Edit `.env` with your values:
 
